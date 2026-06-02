@@ -120,13 +120,19 @@ class FatigueDetectionProcessor(VideoProcessorBase):
 st.title("☁️ Cloud Edge-AI Fatigue Detection")
 st.markdown("Please grant camera permissions to test the LTAM framework in real-time.")
 
-# 启动 WebRTC 摄像头流
+# 1. 定义免费的 Google STUN 穿透服务器
+RTC_CONFIGURATION = {
+    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+}
+
+# 2. 启动 WebRTC 摄像头流
 webrtc_streamer(
     key="dms-demo",
     mode=WebRtcMode.SENDRECV,
+    rtc_configuration=RTC_CONFIGURATION,  # 👈 核心修复：加入穿透服务器
     video_processor_factory=FatigueDetectionProcessor,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True
+    media_stream_constraints={"video": True, "audio": False}
+    # 👈 核心修复：删掉了 async_processing=True，新版本库不需要它，反而会引发线程崩溃
 )
 
 st.markdown("---")
