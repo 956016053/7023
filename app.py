@@ -61,7 +61,7 @@ class RealTimeDMS(nn.Module):
 def load_model():
     model = RealTimeDMS().to(DEVICE)
     # 注意：确保 weights 文件夹和这个 app.py 在同一目录下
-    model.load_state_dict(torch.load("./weights/temporal_dms_best.pth", map_location=DEVICE))
+    model.load_state_dict(torch.load("./temporal_dms_best.pth", map_location=DEVICE))
     model.eval()
     return model
 
