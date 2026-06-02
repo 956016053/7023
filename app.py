@@ -74,45 +74,66 @@ data_transform = transforms.Compose([
 
 
 # ==========================================
-# 4. WebRTC 视频流处理器
+# 4. WebRTC 视频流处理器 (加入人脸追踪升级版)
 # ==========================================
 class FatigueDetectionProcessor(VideoProcessorBase):
     def __init__(self):
         self.model = load_model()
         self.prev_tensor = None
+        # 加载 OpenCV 自带的轻量级人脸检测器
+        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        # 获取前端传来的画面 (BGR格式)
+        # 获取前端传来的画面
         img = frame.to_ndarray(format="bgr24")
-
-        # 预处理
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(img_rgb)
-        curr_tensor = data_transform(pil_img).unsqueeze(0).to(DEVICE)
-
-        if self.prev_tensor is None:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 第一步：检测画面中的人脸
+        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100))
+        
+        if len(faces) > 0:
+            # 找到画面中最大的一张人脸
+            x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
+            
+            # 第二步：将人脸区域裁剪下来 (增加20%的边缘，贴合数据集格式)
+            margin = int(w * 0.2)
+            y1, y2 = max(0, y - margin), min(img.shape[0], y + h + margin)
+            x1, x2 = max(0, x - margin), min(img.shape[1], x + w + margin)
+            face_img = img[y1:y2, x1:x2]
+            
+            # 第三步：只把裁剪后的大头照喂给模型预处理
+            face_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(face_rgb)
+            curr_tensor = data_transform(pil_img).unsqueeze(0).to(DEVICE)
+            
+            if self.prev_tensor is None:
+                self.prev_tensor = curr_tensor.clone()
+                
+            # 第四步：模型推理
+            with torch.no_grad():
+                outputs = self.model(curr_tensor, self.prev_tensor)
+                probs = torch.softmax(outputs, dim=1)[0]
+                drowsy_prob = probs[1].item()
+                
+            # 缓存特征给下一帧 (你的 LTAM 核心技术)
             self.prev_tensor = curr_tensor.clone()
-
-        # 模型推理
-        with torch.no_grad():
-            outputs = self.model(curr_tensor, self.prev_tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
-            drowsy_prob = probs[1].item()
-
-        # 缓存当前帧给下一帧使用 (Feature Caching)
-        self.prev_tensor = curr_tensor.clone()
-
-        # 画面渲染 (OpenCV 用的是 BGR 色彩空间，红是(0,0,255)，绿是(0,255,0))
-        is_drowsy = drowsy_prob > 0.5
-        color = (0, 0, 255) if is_drowsy else (0, 255, 0)
-        label = "DROWSY" if is_drowsy else "NORMAL"
-
-        # 在画面上打上标签
-        cv2.putText(img, f"{label}: {drowsy_prob * 100:.1f}%", (20, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-
+            
+            # 第五步：在画面上画出科技感的人脸追踪框
+            is_drowsy = drowsy_prob > 0.5
+            color = (0, 0, 255) if is_drowsy else (0, 255, 0) # 疲劳变红，正常变绿
+            label = "DROWSY" if is_drowsy else "NORMAL"
+            
+            # 画框并打上标签
+            cv2.rectangle(img, (x, y), (x+w, y+h), color, 3)
+            cv2.putText(img, f"{label}: {drowsy_prob*100:.1f}%", (x, y-10), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        else:
+            # 没检测到人脸时，给出提示并清空时间记忆
+            cv2.putText(img, "Searching for Driver's Face...", (20, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            self.prev_tensor = None 
+            
         return av.VideoFrame.from_ndarray(img, format="bgr24")
-
 
 # ==========================================
 # 5. UI 渲染
